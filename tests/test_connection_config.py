@@ -25,6 +25,18 @@ class ConnectionConfigTests(unittest.TestCase):
         self.assertEqual(config.server_name(3.3), "glyphs-mcp-3")
         self.assertEqual(config.server_name(None), "glyphs-mcp")
 
+    def test_default_port_differs_per_app_so_both_can_run(self):
+        self.assertEqual(config.default_port(4.2), 7745)
+        self.assertEqual(config.default_port("3.5.1"), 7746)
+        self.assertEqual(config.default_port(None), 7745)
+        self.assertNotEqual(config.default_port(3.3), config.default_port(4.1))
+
+    def test_parse_port_accepts_only_unprivileged_tcp_ports(self):
+        self.assertEqual(config.parse_port(" 7750 "), 7750)
+        self.assertEqual(config.parse_port(7745), 7745)
+        for bad in (None, "", "abc", "80", "1023", "65536", "-1", "77.5"):
+            self.assertIsNone(config.parse_port(bad), bad)
+
     def test_release_spec_uses_stable_name_and_active_port(self):
         spec = config.build_server_spec("4.1.2", 7746, uvx_path="/opt/homebrew/bin/uvx")
 

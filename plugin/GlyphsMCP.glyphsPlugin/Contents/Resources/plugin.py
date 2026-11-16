@@ -15,6 +15,7 @@ from GlyphsApp.plugins import *
 from AppKit import NSAlert, NSAlertFirstButtonReturn, NSApp, NSLinkAttributeName, NSMenu, NSMenuItem, NSPasteboard, NSTextField, NSWorkspace
 from Foundation import NSAttributedString, NSMakeRect, NSURL
 from PyObjCTools import AppHelper
+import errno
 import objc
 import json
 import os
@@ -29,15 +30,16 @@ from connection_config import (
 	build_server_spec,
 	claude_code_command,
 	codex_command,
+	default_port,
 	discover_repo_path,
 	generic_config,
 	opencode_command,
+	parse_port,
 	vscode_command,
 	write_cursor_config,
 )
 from server import MCPHTTPServer
 
-DEFAULT_PORT = 7745
 PREF_PORT = "com.nico.glyphs-mcp.port"
 PREF_AUTOSTART = "com.nico.glyphs-mcp.autostart"
 PREF_ALLOW_EXECUTE = "com.nico.glyphs-mcp.allowExecute"
@@ -54,9 +56,8 @@ class GlyphsMCP(GeneralPlugin):
 
 	@objc.python_method
 	def start(self):
-		# Initialize defaults
-		if Glyphs.defaults[PREF_PORT] is None:
-			Glyphs.defaults[PREF_PORT] = DEFAULT_PORT
+		# Initialize defaults. The port is deliberately not stored until the user
+		# sets one, so each Glyphs version falls back to its own default port.
 		if Glyphs.defaults[PREF_AUTOSTART] is None:
 			Glyphs.defaults[PREF_AUTOSTART] = True
 		if Glyphs.defaults[PREF_ALLOW_EXECUTE] is None:
@@ -101,6 +102,12 @@ class GlyphsMCP(GeneralPlugin):
 		)
 		self._connect_parent.setSubmenu_(self._connect_submenu)
 
+		# Port setting (stored per Glyphs app)
+		self._port_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+			self._portMenuTitle(), self.setPort_, ""
+		)
+		self._port_item.setTarget_(self)
+
 		# Documentation item
 		self._docs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
 			"Documentation", self.openDocumentation_, ""
@@ -112,6 +119,7 @@ class GlyphsMCP(GeneralPlugin):
 		submenu.addItem_(self._server_item)
 		submenu.addItem_(NSMenuItem.separatorItem())
 		submenu.addItem_(self._connect_parent)
+		submenu.addItem_(self._port_item)
 		submenu.addItem_(NSMenuItem.separatorItem())
 		submenu.addItem_(self._docs_item)
 		submenu.addItem_(NSMenuItem.separatorItem())
@@ -138,7 +146,7 @@ class GlyphsMCP(GeneralPlugin):
 			print("[GlyphsMCP] Server already running")
 			return
 
-		port = int(Glyphs.defaults[PREF_PORT] or DEFAULT_PORT)
+		port = self._port()
 
 		try:
 			self.bridge = MainThreadBridge()
@@ -151,6 +159,33 @@ class GlyphsMCP(GeneralPlugin):
 			print(f"[GlyphsMCP] Failed to start: {e}")
 			import traceback
 			traceback.print_exc()
+			# Don't leave a half-started bridge or server behind.
+			if self.bridge:
+				self.bridge.stop()
+				self.bridge = None
+			self.http_server = None
+			if isinstance(e, OSError) and e.errno == errno.EADDRINUSE:
+				AppHelper.callAfter(self._showPortInUseAlert, port)
+
+	@objc.python_method
+	def _port(self):
+		"""Port for this Glyphs app: the stored setting, or this version's default."""
+		return parse_port(Glyphs.defaults[PREF_PORT]) or default_port(Glyphs.versionNumber)
+
+	@objc.python_method
+	def _portMenuTitle(self):
+		return f"Port: {self._port()}…"
+
+	@objc.python_method
+	def _showPortInUseAlert(self, port):
+		alert = NSAlert.alloc().init()
+		alert.addButtonWithTitle_("OK")
+		alert.setMessageText_(f"GlyphsMCP could not start on port {port}")
+		alert.setInformativeText_(
+			"Another program, possibly another Glyphs version, is already using this port. "
+			"Choose a different one under Window > GlyphsMCP > Port, then reconnect your MCP client."
+		)
+		alert.runModal()
 
 	@objc.python_method
 	def stopServer(self):
@@ -204,8 +239,42 @@ class GlyphsMCP(GeneralPlugin):
 		else:
 			self.startServer()
 			if self.http_server and self.http_server.is_running:
-				port = int(Glyphs.defaults[PREF_PORT] or DEFAULT_PORT)
-				self._showServerStatusAlert(True, port)
+				self._showServerStatusAlert(True, self._port())
+
+	def setPort_(self, sender):
+		"""Submenu callback — change this Glyphs app's server port."""
+		current = self._port()
+		alert = NSAlert.alloc().init()
+		alert.setMessageText_("GlyphsMCP port")
+		alert.setInformativeText_(
+			f"Port for this copy of Glyphs (default {default_port(Glyphs.versionNumber)}). "
+			"Each Glyphs version needs its own port to run at the same time. "
+			"After changing it, reconnect your MCP client from the Connect menu."
+		)
+		alert.addButtonWithTitle_("Save")
+		alert.addButtonWithTitle_("Cancel")
+		field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 120, 24))
+		field.setStringValue_(str(current))
+		alert.setAccessoryView_(field)
+		alert.window().setInitialFirstResponder_(field)
+
+		if alert.runModal() != NSAlertFirstButtonReturn:
+			return
+		new_port = parse_port(field.stringValue())
+		if new_port is None:
+			self._showConnectionAlert(
+				"Invalid port", "Enter a number between 1024 and 65535."
+			)
+			return
+		if new_port == current:
+			return
+
+		Glyphs.defaults[PREF_PORT] = new_port
+		self._port_item.setTitle_(self._portMenuTitle())
+		if self.http_server and self.http_server.is_running:
+			self.stopServer()
+			self.startServer()
+		print(f"[GlyphsMCP] Port set to {new_port}")
 
 	def toggleExecute_(self, sender):
 		"""Submenu callback — toggle allow-execute preference."""
@@ -279,7 +348,7 @@ class GlyphsMCP(GeneralPlugin):
 
 	@objc.python_method
 	def _connectionSpec(self):
-		port = int(Glyphs.defaults[PREF_PORT] or DEFAULT_PORT)
+		port = self._port()
 		uvx_path = self._findExecutable("uvx") or "uvx"
 		repo = self._repo_path
 		if repo:

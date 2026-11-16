@@ -39,6 +39,24 @@ def server_name(version_number=None):
 	return "glyphs-mcp-3" if major == 3 else "glyphs-mcp"
 
 
+def default_port(version_number=None):
+	"""Return the per-app default HTTP port so Glyphs 3 and Glyphs 4 can run side by side."""
+	try:
+		major = int(str(version_number).split(".", 1)[0])
+	except (TypeError, ValueError):
+		major = None
+	return 7746 if major == 3 else 7745
+
+
+def parse_port(value):
+	"""Return a usable TCP port from a preference or text field, or None if invalid."""
+	try:
+		port = int(str(value).strip())
+	except (TypeError, ValueError):
+		return None
+	return port if 1024 <= port <= 65535 else None
+
+
 def build_server_spec(version_number, port, repo_path=None, uvx_path="uvx"):
 	"""Build the stdio server entry shared by client-specific formats."""
 	if repo_path:

@@ -38,7 +38,7 @@ Open _Window > GlyphsMCP > Connect_ and choose your client:
 - **Cursor** — safely merges the server into `~/.cursor/mcp.json` and backs up an existing file first.
 - **Other MCP Client** — copies a portable `mcpServers` JSON block to the clipboard.
 
-Glyphs 4 registers as `glyphs-mcp` and Glyphs 3 as `glyphs-mcp-3`, each using the port configured in that app, so both can stay registered without collision. If a client CLI is not available to GlyphsApp, the equivalent Terminal command is copied to the clipboard instead.
+Glyphs 4 registers as `glyphs-mcp` and Glyphs 3 as `glyphs-mcp-3`, each using the port configured in that app, so both can stay registered without collision. Ports default to 7745 for Glyphs 4 and 7746 for Glyphs 3, so both apps can run at the same time. Change a port with **Window > GlyphsMCP > Port…**, then reconnect your MCP client from the Connect menu so it picks up the new URL. If a client CLI is not available to GlyphsApp, the equivalent Terminal command is copied to the clipboard instead.
 
 For manual setup, use the endpoint shown when starting the GlyphsMCP server. For example:
 
